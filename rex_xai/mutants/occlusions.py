@@ -69,3 +69,53 @@ def context_occlusion(mask: tt.Tensor, data: tt.Tensor, context: tt.Tensor, nois
             device
         )
     return tt.where(not mask, context, data)
+
+
+def blur_occlusion(
+    mask: tt.Tensor, data: tt.Tensor, sigma: float = 5.0
+) -> tt.Tensor:
+    """Gaussian blur occlusion: masked regions are replaced with a blurred
+    version of the entire image, so edges between masked and visible regions
+    are smoothed rather than hard-cut to a constant colour.
+
+    @param mask: boolean tensor, True = keep, False = occlude
+    @param data: image tensor of shape (1, C, H, W)
+    @param sigma: standard deviation for gaussian blur kernel
+    @return: torch.Tensor with masked regions replaced by blurred pixels
+    """
+    device = data.device
+    np_data = data.detach().cpu().numpy()  # (1, C, H, W)
+    blurred = np.zeros_like(np_data)
+    for c in range(np_data.shape[1]):
+        blurred[0, c] = gaussian_filter(np_data[0, c], sigma=sigma)
+    blurred_tensor = tt.from_numpy(blurred).to(device)
+    np_mask = mask.detach().cpu().numpy().astype(bool)
+    result = np.where(np_mask, np_data, blurred)
+    return tt.from_numpy(result).to(device)
+
+
+def median_occlusion(
+    mask: tt.Tensor, data: tt.Tensor
+) -> tt.Tensor:
+    """Median colour occlusion: masked regions are replaced with the
+    per-channel median value of the entire image, giving a neutral
+    fill that matches the overall colour distribution of the scene.
+
+    @param mask: boolean tensor, True = keep, False = occlude
+    @param data: image tensor of shape (1, C, H, W)
+    @return: torch.Tensor with masked regions replaced by per-channel median
+    """
+    device = data.device
+    np_data = data.detach().cpu().numpy()  # (1, C, H, W)
+    result = np_data.copy()
+    np_mask = mask.detach().cpu().numpy().astype(bool)
+    for c in range(np_data.shape[1]):
+        if np_mask.ndim == 4:
+            chan_mask = np_mask[0, c]
+        elif np_mask.ndim == 3:
+            chan_mask = np_mask[c]
+        else:
+            chan_mask = np_mask
+        median_val = float(np.median(np_data[0, c]))
+        result[0, c] = np.where(chan_mask, np_data[0, c], median_val)
+    return tt.from_numpy(result).to(device)

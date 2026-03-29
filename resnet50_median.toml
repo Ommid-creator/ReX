@@ -1,0 +1,13 @@
+[rex]
+mask_value = "median"
+seed = 0
+batch_size = 32
+
+[rex.onnx]
+means = [0.485, 0.456, 0.406]
+stds = [0.229, 0.224, 0.225]
+norm = 255.0
+
+[causal]
+iters = 20
+min_box_size = 10

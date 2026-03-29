@@ -218,36 +218,71 @@ class Explanation:
                     insertion_memo = insertion_mask[-1]
 
     def __generate_circle_coordinates(self, centre, radius: int):
-        assert self.data.model_height is not None
-        assert self.data.model_width is not None
+        """Generate a boolean mask for a filled circle (disc)."""
+        H, W = self.data.model_shape[-2], self.data.model_shape[-1]
         Y, X = tt.meshgrid(
-            tt.arange(0, self.data.model_height),
-            tt.arange(0, self.data.model_width),
+            tt.arange(H, device=self.data.device),
+            tt.arange(W, device=self.data.device),
             indexing="ij",
         )
-
         dist_from_centre = tt.sqrt(
-            (Y.to(self.data.device) - centre[0]) ** 2
-            + (X.to(self.data.device) - centre[1]) ** 2
+            ((Y - centre[0]) ** 2 + (X - centre[1]) ** 2).float()
         )
+        return dist_from_centre <= radius
 
-        # this produces a H * W mask which can be using in conjunction with tt.where()
-        circle_mask = dist_from_centre <= radius
+    def __generate_ellipse_coordinates(self, centre, radius: int, shape: str):
+        """Generate a boolean mask for a filled ellipse.
 
-        return circle_mask
+        @param centre: (row, col) centre of the ellipse
+        @param radius: base radius — used as the shorter semi-axis
+        @param shape: "ellipse_h" for wide (2:1 width:height),
+                      "ellipse_v" for tall (1:2 width:height)
+        @return: boolean (H, W) tensor, True inside the ellipse
+        """
+        H, W = self.data.model_shape[-2], self.data.model_shape[-1]
+        Y, X = tt.meshgrid(
+            tt.arange(H, device=self.data.device),
+            tt.arange(W, device=self.data.device),
+            indexing="ij",
+        )
+        if shape == "ellipse_h":
+            # wider than tall: semi_x = 2*radius, semi_y = radius
+            semi_y = float(radius)
+            semi_x = float(radius) * 2.0
+        else:  # ellipse_v
+            # taller than wide: semi_x = radius, semi_y = 2*radius
+            semi_y = float(radius) * 2.0
+            semi_x = float(radius)
+        ellipse_mask = (
+            ((Y - centre[0]).float() / semi_y) ** 2
+            + ((X - centre[1]).float() / semi_x) ** 2
+        ) <= 1.0
+        return ellipse_mask
 
     def __draw_circle(self, centre, start_radius=None):
+        """Draw a spotlight mask using the shape set in args.spotlight_shape.
+
+        Supports "circle", "ellipse_h", "ellipse_v".
+        Returns (start_radius, shape_mask_2d, full_channel_mask).
+        """
         if start_radius is None:
             start_radius = self.args.spatial_initial_radius
-        mask = tt.zeros(
-            self.data.model_shape[1:], dtype=tt.bool, device=self.data.device
-        )
-        circle_mask = self.__generate_circle_coordinates(centre, start_radius)
-        if self.data.model_order == "first":
-            mask[:, circle_mask] = True
+
+        shape = getattr(self.args, "spotlight_shape", "circle")
+
+        if shape == "circle":
+            shape_mask = self.__generate_circle_coordinates(centre, start_radius)
         else:
-            mask[circle_mask, :] = True
-        return start_radius, circle_mask, mask
+            shape_mask = self.__generate_ellipse_coordinates(centre, start_radius, shape)
+
+        mask = tt.zeros(self.data.model_shape[1:], dtype=tt.bool, device=self.data.device)
+        channel_order = getattr(self.data, "model_order", "first")
+        if channel_order == "last":
+            mask[shape_mask, :] = True
+        else:
+            mask[:, shape_mask] = True
+
+        return start_radius, shape_mask, mask
 
     def compute_masked_responsibility(self, mask):
         try:

@@ -485,15 +485,14 @@ def _explanation(
         exp.heatmap_plot(path)
 
     if args.output is not None:
-        if path is None:
-            if args.output == "show":
-                path = None
-            else:
-                path = args.output
-        if args.strategy == Strategy.MultiSpotlight:
-            exp.save(path, clauses=clauses)  # type: ignore
+        if args.output == "show":
+            output_path = None
         else:
-            exp.save(path)  # type: ignore
+            output_path = args.output
+        if args.strategy == Strategy.MultiSpotlight:
+            exp.save(output_path, clauses=clauses)  # type: ignore
+        else:
+            exp.save(output_path)  # type: ignore
 
     if db is not None:
         if args.strategy == Strategy.MultiSpotlight:

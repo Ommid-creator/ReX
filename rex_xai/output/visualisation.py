@@ -97,7 +97,7 @@ def _transparent_cmap(cmap, N=255):
     "Copy colormap and set alpha values"
     mycmap = cmap
     mycmap._init()
-    mycmap._lut[:, -1] = np.linspace(0, 0.8, N + 4)
+    mycmap._lut[:, -1] = np.linspace(0.0, 0.9, N + 4)
     return mycmap
 
 
@@ -113,8 +113,13 @@ def heatmap_plot(data: Data, resp_map, colour, path=None):
             input = try_detach(data.input)
 
         resp_map = try_detach(resp_map)
+        # Normalize to [0, 1] so contourf always has visible contrast
+        resp_min = resp_map.min()
+        resp_max = resp_map.max()
+        if resp_max > resp_min:
+            resp_map = (resp_map - resp_min) / (resp_max - resp_min)
         ax.imshow(input)
-        ax.contourf(x, y, resp_map, 15, cmap=mycmap)
+        ax.contourf(x, y, resp_map, 50, cmap=mycmap)
         plt.axis("off")
         ax.get_xaxis().set_visible(False)
         ax.get_yaxis().set_visible(False)
@@ -194,6 +199,15 @@ def surface_plot(
     logger.info(
         f"Plotting surface plot for {target.classification} with shape {resp_map.shape} and image shape ({input.height}, {input.width})"
     )
+    # Ensure resp_map is a numpy array on CPU
+    resp_map = try_detach(resp_map)
+    # Resize resp_map to match the original image dimensions for surface plotting
+    orig_h, orig_w = input.height, input.width
+    if resp_map.shape != (orig_h, orig_w):
+        from scipy.ndimage import zoom
+        zoom_h = orig_h / resp_map.shape[0]
+        zoom_w = orig_w / resp_map.shape[1]
+        resp_map = zoom(resp_map, (zoom_h, zoom_w), order=1)
     img, _x, _y = plot_3d(input, resp_map, True)
     fig = plt.figure()
 
@@ -468,6 +482,23 @@ def __save_multi(path, explanations_subset, data, img, colours_subset, args):
     explanations_subset = [
         __transpose_mask(explanation, data.mode) for explanation in explanations_subset
     ]
+
+    # Resize masks to match original image dimensions if they differ
+    img_arr = np.asarray(img)
+    orig_h, orig_w = img_arr.shape[:2]
+
+    def _resize_mask(mask):
+        mask_h, mask_w = mask.shape[:2] if mask.ndim == 3 else mask.shape
+        if (mask_h, mask_w) == (orig_h, orig_w):
+            return mask
+        mask_2d = mask[:, :, 0] if mask.ndim == 3 else mask
+        mask_pil = Image.fromarray(mask_2d.astype(np.uint8) * 255)
+        mask_pil = mask_pil.resize((orig_w, orig_h), Image.Resampling.NEAREST)
+        mask_2d_resized = np.array(mask_pil) > 127
+        return np.stack([mask_2d_resized] * 3, axis=-1)
+
+    explanations_subset = [_resize_mask(m) for m in explanations_subset]
+
     composite_mask = make_composite_mask(explanations_subset)
 
     img = apply_boundaries_to_image(img, explanations_subset, colours_subset)
@@ -562,29 +593,46 @@ def save_image(mask: tt.Tensor | np.ndarray, data: Data, args: CausalArgs, path=
 
         mask = __transpose_mask(mask, data.mode)
 
+        # Resize mask to match original image dimensions if they differ
+        img_arr = np.asarray(img)
+        orig_h, orig_w = img_arr.shape[:2]
+        mask_h, mask_w = mask.shape[:2] if mask.ndim == 3 else mask.shape
+        if (mask_h, mask_w) != (orig_h, orig_w):
+            from PIL import Image as PILImage
+            # mask is boolean (H,W) or (H,W,C) — resize the 2D spatial mask
+            if mask.ndim == 3:
+                mask_2d = mask[:, :, 0]
+            else:
+                mask_2d = mask
+            mask_pil = PILImage.fromarray(mask_2d.astype(np.uint8) * 255)
+            mask_pil = mask_pil.resize((orig_w, orig_h), PILImage.Resampling.NEAREST)
+            mask_2d_resized = np.array(mask_pil) > 127
+            # Reconstruct 3-channel mask
+            mask = np.stack([mask_2d_resized] * 3, axis=-1)
+
         if args.raw:
-            out = np.where(mask, img, 0).squeeze(0)  # 0 used to mask image with black
+            out = np.where(mask, img_arr, 0).squeeze(0)
             out = Image.fromarray(out, data.mode)
         elif args.mask_value == "context":
-            # Use preprocessed context and data as shape needs to match
             if isinstance(data.context, tt.Tensor):
                 data.context = data.context.squeeze().detach().cpu().numpy()
             if isinstance(data.data, tt.Tensor):
                 data.data = data.data.squeeze().detach().cpu().numpy()
             context = __transpose_mask(data.context, data.mode)
-            img = __transpose_mask(data.data, data.mode)
-            fig = np.where(not mask, context, img)
+            fig_data = __transpose_mask(data.data, data.mode)
+            fig = np.where(~mask, context, fig_data)
             out, ax = plt.subplots()
             ax.imshow(fig)
             ax.axis("off")
         else:
-            exp = np.where(mask, img, args.colour)
-            exp = Image.fromarray(exp, "RGB")
-            out = Image.blend(exp, img, args.alpha)
+            exp = np.where(mask, img_arr, args.colour)
+            exp = Image.fromarray(exp.astype(np.uint8), "RGB")
+            img_pil = img if isinstance(img, Image.Image) else Image.fromarray(img_arr)
+            out = Image.blend(exp, img_pil, args.alpha)
 
             if args.mark_segments:
-                segs = slic(np.array(img))
-                m = add_boundaries(np.array(img), segs)
+                segs = slic(np.array(img_pil))
+                m = add_boundaries(np.array(img_pil), segs)
                 marked = Image.fromarray(m, data.mode)
                 out = Image.blend(out, marked, args.alpha)
 

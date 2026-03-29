@@ -100,6 +100,7 @@ class Args:
         self.spotlight_eta: float = 0.2
         self.spotlight_step: int = 5
         self.spotlight_objective_function: str = "none"
+        self.spotlight_shape: str = "circle"  # one of: "circle", "ellipse_h", "ellipse_v"
         self.max_spotlight_budget = 40
         self.permitted_overlap: float = 0.0
         # analysis
@@ -533,6 +534,7 @@ def process_config_dict(config_file_args, args):
             "max_spotlight_budget",
             "spotlight_objective_function",
             "permitted_overlap",
+            "spotlight_shape",
         ],
         "evaluation": ["insertion_step", "normalise_curves"],
     }

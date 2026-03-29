@@ -249,6 +249,12 @@ class Data:
                 self.mask_value = lambda m, d: context_occlusion(
                     m, d, self.context, self.context_noise
                 )
+            case "blur":
+                from rex_xai.mutants.occlusions import blur_occlusion
+                self.mask_value = blur_occlusion
+            case "median":
+                from rex_xai.mutants.occlusions import median_occlusion
+                self.mask_value = median_occlusion
             case _:
                 raise ValueError(
                     f"Invalid mask value {m}. Should be an integer, float, or one of 'min', 'mean', 'spectral'"
